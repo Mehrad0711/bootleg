@@ -620,7 +620,7 @@ class StaticEmb(EntityEmb):
                 logger, f"Loading existing static embedding table from {prep_file}"
             )
             start = time.time()
-            entity2staticemb_table = np.load(prep_file)  # , mmap_mode="r")
+            entity2staticemb_table = np.load(prep_file, mmap_mode="r")
             log_rank_0_debug(
                 logger,
                 f"Loaded existing static embedding table in {round(time.time() - start, 2)}s",
@@ -633,7 +633,7 @@ class StaticEmb(EntityEmb):
                 emb_file=emb_file, entity_symbols=entity_symbols
             )
             np.save(prep_file, entity2staticemb_table)
-            entity2staticemb_table = np.load(prep_file)  # , mmap_mode="r")
+            entity2staticemb_table = np.load(prep_file, mmap_mode="r")
             log_rank_0_debug(
                 logger,
                 f"Finished building and saving static embedding table in {round(time.time() - start, 2)}s.",
@@ -652,7 +652,6 @@ class StaticEmb(EntityEmb):
         """
         ending = os.path.splitext(emb_file)[1]
         found = 0
-        raw_num_ents = 0
         if ending == ".json":
             dct = utils.load_json_file(emb_file)
             val = next(iter(dct.values()))
