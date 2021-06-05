@@ -2,35 +2,35 @@
 
 import argparse
 import logging
+import math
 import multiprocessing
 import os
 import string
 import time
-import math
+from collections import defaultdict
 
 import jsonlines
 import marisa_trie
 import nltk
 import numpy as np
 import spacy
+import torch
 import ujson
 from spacy.cli.download import download as spacy_download
 from tqdm import tqdm
+from transformers import AutoConfig, AutoModelForTokenClassification, AutoTokenizer
 
 from bootleg.symbols.constants import ANCHOR_KEY
 from bootleg.utils.utils import get_lnrm
-
-from collections import defaultdict
-import torch
-from transformers import AutoConfig, AutoModelForTokenClassification, AutoTokenizer
-
 
 logger = logging.getLogger(__name__)
 
 try:
     nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
 except OSError:
-    logger.warning(f"Spacy models en_core_web_sm not found.  Downloading and installing.")
+    logger.warning(
+        f"Spacy models en_core_web_sm not found.  Downloading and installing."
+    )
     try:
         spacy_download("en_core_web_sm")
         nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
@@ -141,21 +141,29 @@ def get_new_to_old_dict(split_sentence):
     return new_to_old
 
 
-def extract_with_neural_model(all_sentences, neural_ner_model, batch_size, embeddings_dir):
+def extract_with_neural_model(
+    all_sentences, neural_ner_model, neural_batch_size, neural_embeddings_dir
+):
 
-    config = AutoConfig.from_pretrained(neural_ner_model, cache_dir=embeddings_dir)
+    config = AutoConfig.from_pretrained(
+        neural_ner_model, cache_dir=neural_embeddings_dir
+    )
     id2label = config.id2label
     not_entity_label = "O"
-    tokenizer = AutoTokenizer.from_pretrained(neural_ner_model, cache_dir=embeddings_dir, use_fast=True)
-    model = AutoModelForTokenClassification.from_pretrained(neural_ner_model, cache_dir=embeddings_dir, config=config)
+    tokenizer = AutoTokenizer.from_pretrained(
+        neural_ner_model, cache_dir=neural_embeddings_dir, use_fast=True
+    )
+    model = AutoModelForTokenClassification.from_pretrained(
+        neural_ner_model, cache_dir=neural_embeddings_dir, config=config
+    )
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    
+
     # run sentence through neural NER model to see what's up
-    
+
     all_spacyed = []
-    
+
     # Remove multiple spaces and replace with single - tokenization eats multiple spaces but
     # ngrams doesn't which can cause parse issues
     for sentence in all_sentences:
@@ -163,29 +171,29 @@ def extract_with_neural_model(all_sentences, neural_ner_model, batch_size, embed
         doc = nlp(sentence)
         spacy_tokenized_sentence = " ".join(map(lambda token: token.text, doc))
         all_spacyed.append(spacy_tokenized_sentence)
-    
-    num_batches = math.ceil(len(all_spacyed) / batch_size)
-    
+
+    num_batches = math.ceil(len(all_spacyed) / neural_batch_size)
+
     all_length2entities = []
-    
+
     for i in range(num_batches):
-        data = all_spacyed[i*batch_size: (i+1)*batch_size]
+        data = all_spacyed[i * neural_batch_size : (i + 1) * neural_batch_size]
         tokenized = tokenizer.batch_encode_plus(data, padding=True)
-        output = model(torch.tensor(tokenized['input_ids'], device=device))
+        output = model(torch.tensor(tokenized["input_ids"], device=device))
         logits = output.logits
         predictions = torch.argmax(logits, dim=-1).tolist()
         for k, pred in enumerate(predictions):
             labels = [id2label[p] for p in pred]
-            
+
             wordid2label = {}
             word_ids = tokenized.encodings[k].word_ids
-            
+
             for wid, label in zip(word_ids, labels):
                 if label != not_entity_label and wid is not None:
                     if wid not in wordid2label.keys():
                         # remove I-/ B- from label
-                        wordid2label[wid] = label.split('-')[1]
-            
+                        wordid2label[wid] = label.split("-")[1]
+
             all_entites = []
             all_spans = []
             orig_tokens = data[k].split(" ")
@@ -197,7 +205,9 @@ def extract_with_neural_model(all_sentences, neural_ner_model, batch_size, embed
                         tokens = [token]
                         spans = [i, i + 1]
                     # join with previous token
-                    elif i - 1 in wordid2label and wordid2label[i - 1] == wordid2label[i]:
+                    elif (
+                        i - 1 in wordid2label and wordid2label[i - 1] == wordid2label[i]
+                    ):
                         tokens.append(token)
                         spans[1] += 1
                     else:
@@ -208,14 +218,14 @@ def extract_with_neural_model(all_sentences, neural_ner_model, batch_size, embed
             if len(tokens):
                 all_entites.append(" ".join(tokens))
                 all_spans.append(spans)
-            
+
             length2entities = defaultdict(list)
             for entity, span in zip(all_entites, all_spans):
                 entity_len = span[1] - span[0]
                 length2entities[entity_len].append((entity, span))
 
             all_length2entities.append(length2entities)
-            
+
     return all_length2entities
 
 
@@ -233,7 +243,10 @@ def has_overlap(j_st_adjusted, j_end_adjusted, used_aliases):
             break
     return not keep
 
-def find_aliases_in_sentence_tag(sentence, len2ent, all_aliases, min_alias_len=1, max_alias_len=6):
+
+def find_aliases_in_sentence_tag(
+    sentence, len2ent, all_aliases, min_alias_len=1, max_alias_len=6
+):
     """Mention extraction function.
 
     Args:
@@ -249,8 +262,8 @@ def find_aliases_in_sentence_tag(sentence, len2ent, all_aliases, min_alias_len=1
     # ngrams doesn't which can cause parse issues
     sentence = " ".join(sentence.strip().split())
     doc = nlp(sentence)
-    spacy_tokenized_sentence = " ".join(map(lambda token: token.text, doc))
-    
+    # spacy_tokenized_sentence = " ".join(map(lambda token: token.text, doc))
+
     split_sent = sentence.split()
     new_to_old_span = get_new_to_old_dict(split_sent)
     # find largest aliases first
@@ -353,7 +366,7 @@ def find_aliases_in_sentence_tag(sentence, len2ent, all_aliases, min_alias_len=1
                 if has_overlap(j_st_adjusted, j_end_adjusted, used_aliases):
                     continue
                 used_aliases.append(tuple([final_gram, j_st_adjusted, j_end_adjusted]))
-        
+
         if len2ent:
             neural_detected_entities = len2ent[n]
             for entities, span in neural_detected_entities:
@@ -364,10 +377,13 @@ def find_aliases_in_sentence_tag(sentence, len2ent, all_aliases, min_alias_len=1
                 j_st, j_end = span[0], span[1]
                 j_st_adjusted = new_to_old_span[j_st]
                 j_end_adjusted = new_to_old_span[j_end]
-                if has_overlap(j_st_adjusted, j_end_adjusted, used_aliases) or j_end_adjusted <= j_st_adjusted:
+                if (
+                    has_overlap(j_st_adjusted, j_end_adjusted, used_aliases)
+                    or j_end_adjusted <= j_st_adjusted
+                ):
                     continue
                 used_aliases.append(tuple([entities, j_st_adjusted, j_end_adjusted]))
-            
+
     # sort based on span order
     aliases_for_sorting = sorted(used_aliases, key=lambda elem: [elem[1], elem[2]])
     used_aliases = [a[0] for a in aliases_for_sorting]
@@ -451,11 +467,13 @@ def subprocess(args):
     max_alias_len = args["max_alias_len"]
     verbose = args["verbose"]
     all_aliases = marisa_trie.Trie().load(args["all_aliases_trie_f"])
-    num_lines = sum(1 for _ in open(in_file)),
+    num_lines = (sum(1 for _ in open(in_file)),)
     length2entities = args["length2entities"]
 
     with jsonlines.open(in_file) as f_in, jsonlines.open(out_file, "w") as f_out:
-        for i, line in enumerate(tqdm(f_in, total=num_lines, disable=not verbose, desc="Processing data")):
+        for i, line in enumerate(
+            tqdm(f_in, total=num_lines, disable=not verbose, desc="Processing data")
+        ):
             len2ent = None
             if length2entities:
                 len2ent = length2entities[i]
@@ -494,9 +512,8 @@ def extract_mentions(
     num_workers=8,
     verbose=False,
     neural_ner_model=None,
-    batch_size=32,
-    embeddings_dir='.embeddings',
-    
+    neural_batch_size=32,
+    neural_embeddings_dir=".embeddings",
 ):
     """Extracts mentions from file.
 
@@ -524,8 +541,13 @@ def extract_mentions(
         with jsonlines.open(in_filepath, "r") as in_file:
             for line in in_file:
                 all_lines.append(line)
-        all_length2entities = extract_with_neural_model([line["sentence"] for line in all_lines], neural_ner_model, batch_size, embeddings_dir)
-    print('Finished neural mention extraction...')
+        all_length2entities = extract_with_neural_model(
+            [line["sentence"] for line in all_lines],
+            neural_ner_model,
+            neural_batch_size,
+            neural_embeddings_dir,
+        )
+    print("Finished neural mention extraction...")
     #########
 
     # multiprocessing
@@ -546,22 +568,26 @@ def extract_mentions(
         chunk_infiles = [
             f"{chunk_file_path}_{chunk_id}_in.jsonl" for chunk_id in range(num_chunks)
         ]
-        final_chunk_sizes = chunk_text_data(in_filepath, chunk_infiles, chunk_size, num_lines)
+        final_chunk_sizes = chunk_text_data(
+            in_filepath, chunk_infiles, chunk_size, num_lines
+        )
         logger.debug("Calling subprocess...")
         # call subprocesses on chunks
         pool = multiprocessing.Pool(processes=num_processes)
         chunk_outfiles = [
             f"{chunk_file_path}_{chunk_id}_out.jsonl" for chunk_id in range(num_chunks)
         ]
-        
+
         # split all_length2entities
         chunk_length2entities = [[] for _ in range(num_chunks)]
         cur_size = 0
         if all_length2entities:
             for i in range(num_chunks):
-                chunk_length2entities[i] = all_length2entities[cur_size: cur_size + final_chunk_sizes[i]]
+                chunk_length2entities[i] = all_length2entities[
+                    cur_size : cur_size + final_chunk_sizes[i]
+                ]
                 cur_size += final_chunk_sizes[i]
-            
+
         subprocess_args = [
             {
                 "in_file": chunk_infiles[i],
@@ -570,7 +596,7 @@ def extract_mentions(
                 "max_alias_len": max_alias_len,
                 "all_aliases_trie_f": all_aliases_trie_f,
                 "verbose": verbose,
-                "length2entities": chunk_length2entities[i]
+                "length2entities": chunk_length2entities[i],
             }
             for i in range(num_chunks)
         ]
@@ -593,13 +619,19 @@ def extract_mentions(
         logger.debug(f"Using 1 worker...")
 
         sent_idx_unq = 0
-        with jsonlines.open(in_filepath, "r") as in_file, jsonlines.open(out_filepath, "w") as out_file:
+        with jsonlines.open(in_filepath, "r") as in_file, jsonlines.open(
+            out_filepath, "w"
+        ) as out_file:
             for i, line in enumerate(in_file):
                 length2entities = None
                 if all_length2entities:
                     length2entities = all_length2entities[i]
                 found_aliases, found_spans = find_aliases_in_sentence_tag(
-                    line["sentence"], length2entities, all_aliases_trie, min_alias_len, max_alias_len
+                    line["sentence"],
+                    length2entities,
+                    all_aliases_trie,
+                    min_alias_len,
+                    max_alias_len,
                 )
                 new_line = create_out_line(line, found_aliases, found_spans)
                 if "sent_idx_unq" not in new_line:
@@ -607,7 +639,9 @@ def extract_mentions(
                     sent_idx_unq += 1
                 out_file.write(new_line)
 
-    logger.debug(f"Finished in {time.time() - start_time} seconds. Wrote out to {out_filepath}")
+    logger.debug(
+        f"Finished in {time.time() - start_time} seconds. Wrote out to {out_filepath}"
+    )
 
 
 def main():
