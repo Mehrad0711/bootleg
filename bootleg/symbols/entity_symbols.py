@@ -274,18 +274,18 @@ class EntitySymbols:
         """
         return eid in self._eid2qid[eid]
 
-    def get_eid(self, id):
-        """Gets the QID for the EID.
+    def get_eid(self, qid):
+        """Gets the EID for the QID.
 
         Args:
-            id: EID int
+            string: QID string
 
-        Returns: QID string
+        Returns: EID int
         """
-        assert id in self._qid2eid
-        return self._qid2eid[id]
+        assert qid in self._qid2eid
+        return self._qid2eid[qid]
 
-    def get_qid_cands(self, alias, max_cand_pad=False):
+    def get_qid_cands(self, alias, max_cand_pad=False, skip_new=False):
         """Get the QID candidates for an alias.
 
         Args:
@@ -294,8 +294,13 @@ class EntitySymbols:
 
         Returns: List of QID strings
         """
-        assert alias in self._alias2qids, f"{alias} not in alias2qid mapping"
-        res = [qid_pair[0] for qid_pair in self._alias2qids[alias]]
+        if alias not in self._alias2qids:
+            if skip_new:
+                res = ["Q1"]
+            else:
+                raise AssertionError(f"{alias} not in alias2qid mapping")
+        else:
+            res = [qid_pair[0] for qid_pair in self._alias2qids[alias]]
         if max_cand_pad:
             res = res + ["-1"] * (self.max_candidates - len(res))
         return res
