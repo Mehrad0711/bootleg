@@ -426,10 +426,10 @@ class BootlegAnnotator(object):
         batch_idx_unq = []
         batch_subsplit_idx = []
 
+        all_length2entities = None
         if do_extract_mentions and self.neural_ner_model:
             #########
             # use neural model
-            all_length2entities = None
             all_length2entities = extract_with_neural_model(
                 text_list,
                 self.neural_ner_model,
@@ -447,7 +447,9 @@ class BootlegAnnotator(object):
         ):
             if do_extract_mentions:
                 sample = self.extract_mentions(
-                    text_list[idx_unq], all_length2entities[idx_unq], label_func
+                    text_list[idx_unq],
+                    all_length2entities[idx_unq] if all_length2entities else None,
+                    label_func,
                 )
             else:
                 sample = extracted_examples[idx_unq]
