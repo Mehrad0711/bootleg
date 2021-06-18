@@ -343,8 +343,11 @@ class EntitySymbols:
 
         Returns: title string
         """
-        assert id in self._qid2title
-        return self._qid2title[id]
+        # assert id in self._qid2title
+        if id not in self._qid2title:
+            return self._qid2title["Q1"]
+        else:
+            return self._qid2title[id]
 
     def get_alias_idx(self, alias):
         """Gets the numeric index of an alias.
