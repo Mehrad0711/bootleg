@@ -318,7 +318,10 @@ class BootlegAnnotator(object):
             "sentence": text,
             "aliases": found_aliases,
             "spans": found_spans,
-            "cands": [self.entity_db.get_qid_cands(al) for al in found_aliases],
+            "cands": [
+                self.entity_db.get_qid_cands(al, allow_skip=True)
+                for al in found_aliases
+            ],
             # we don't know the true QID
             "qids": ["Q-1" for i in range(len(found_aliases))],
             "gold": [True for i in range(len(found_aliases))],
