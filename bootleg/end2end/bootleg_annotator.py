@@ -15,6 +15,7 @@ import emmental
 from bootleg.data import get_dataloader_embeddings
 from bootleg.end2end.annotator_utils import DownloadProgressBar
 from bootleg.end2end.extract_mentions import (
+    extract_with_neural_model,
     find_aliases_in_sentence_tag,
     get_all_aliases,
 )
@@ -160,12 +161,18 @@ class BootlegAnnotator(object):
         model_name=None,
         return_embs=False,
         verbose=False,
+        neural_ner_model=None,
+        neural_batch_size=32,
+        neural_embeddings_dir=".embeddings",
     ):
         self.min_alias_len = min_alias_len
         self.max_alias_len = max_alias_len
         self.verbose = verbose
         self.threshold = threshold
         self.return_embs = return_embs
+        self.neural_ner_model = neural_ner_model
+        self.neural_batch_size = neural_batch_size
+        self.neural_embeddings_dir = neural_embeddings_dir
 
         if not cache_dir:
             self.cache_dir = get_default_cache()
@@ -289,18 +296,23 @@ class BootlegAnnotator(object):
             self.config, self.entity_db
         )
 
-    def extract_mentions(self, text, label_func):
+    def extract_mentions(self, text, length2entities, label_func):
         """Wrapper function for mention extraction.
 
         Args:
             text: text to extract mentions from
+            length2entities:
             label_func: function that performs extraction (input is (text, alias trie, max alias length) ->
                         output is list of found aliases and found spans
 
         Returns: JSON object of sentence to be used in eval
         """
         found_aliases, found_spans = label_func(
-            text, self.all_aliases_trie, self.min_alias_len, self.max_alias_len
+            text,
+            length2entities,
+            self.all_aliases_trie,
+            self.min_alias_len,
+            self.max_alias_len,
         )
         return {
             "sentence": text,
@@ -411,6 +423,20 @@ class BootlegAnnotator(object):
         batch_example_aliases = []
         batch_idx_unq = []
         batch_subsplit_idx = []
+
+        all_length2entities = None
+        if do_extract_mentions and self.neural_ner_model:
+            #########
+            # use neural model
+            all_length2entities = extract_with_neural_model(
+                text_list,
+                self.neural_ner_model,
+                self.neural_batch_size,
+                self.neural_embeddings_dir,
+            )
+            print("Finished neural mention extraction...")
+            #########
+
         for idx_unq in tqdm(
             range(num_exs),
             desc="Prepping data",
@@ -418,7 +444,11 @@ class BootlegAnnotator(object):
             disable=not self.verbose,
         ):
             if do_extract_mentions:
-                sample = self.extract_mentions(text_list[idx_unq], label_func)
+                sample = self.extract_mentions(
+                    text_list[idx_unq],
+                    all_length2entities[idx_unq] if all_length2entities else None,
+                    label_func,
+                )
             else:
                 sample = extracted_examples[idx_unq]
                 # Add the unk qids and gold values
